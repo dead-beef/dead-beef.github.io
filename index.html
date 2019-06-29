@@ -1,12 +1,303 @@
 <!DOCTYPE html>
 <html>
 	<head>
-		<base href="/"/>
+		<!-- <base href="/"/> -->
 		<meta charset="utf-8"/>
 		<meta name="viewport" content="width=device-width, initial-scale=1"/>
+		<link rel="stylesheet" href="css/ewyJLV.css">
 		<title>dead-beef</title>
 	</head>
 	<body>
-		test
+		<div class="content">
+			<div class="content-inner">
+				<div class="log" id="loading">
+					Loading shader...
+				</div>
+				<div class="log hide" id="error"></div>
+				<canvas class="image hide"></canvas>
+				<div class="text">
+					Loading..?
+				</div>
+			</div>
+		</div>
+
+		<script id="fragment" type="x-shader/x-fragment">
+			precision mediump float;
+
+			#define PI 3.141592
+			#define _2PI 6.283184
+
+			#define PETAL_SIZE_CONTINUOUS 0
+			#define PETAL_SIZE_LAYERS 1
+
+			#define CENTER_NONE 0
+			#define CENTER_CIRCLE 1
+			#define CENTER_EYE 2
+
+			#define COLOR_CONST 0
+			#define COLOR_FUNC 1
+			#define COLOR_TEXTURE 2
+
+			varying vec3 position;
+			varying vec2 uv;
+
+			//uniform vec2 u_resolution;
+			uniform float u_time;
+			const int u_animate = 1;
+
+			const float u_scale = 3.3;
+			const float u_rotate = 0.0;
+
+			const int u_color_type = COLOR_FUNC;
+			const vec3 u_light_attenuation = vec3(1.0, 48.0, 64.0);
+
+			const int u_center_type = CENTER_EYE;
+			const float u_center_size = 0.2;
+			const float u_center_rotate = 0.0;
+
+			const float u_eye_outer_power = 0.6;
+			const float u_eye_outer_shape = 1.0;
+			const float u_eye_inner_power = 0.4;
+			const float u_eye_inner_shape = 0.0;
+
+			const float u_petal_piece_x = 0.0;
+			const vec2 u_petal_piece_y = vec2(0.5, 0.0);
+			const vec2 u_petal_piece_power = vec2(0.8, 1.8);
+
+			const int u_petals = 15;
+			const int u_petals_per_layer = 5;
+			const int u_petal_size = PETAL_SIZE_CONTINUOUS;
+			const float u_layer_offset = PI * 225.0 / 180.0;
+
+			const int MAX_PLOT_COUNT = 128;
+
+			int min(int x, int y) {
+				return x > y ? y : x;
+			}
+
+			int max(int x, int y) {
+				return x < y ? y : x;
+			}
+
+			int get_center_plot_count() {
+				if(u_center_type == CENTER_CIRCLE) {
+					return 1;
+				}
+				if(u_center_type == CENTER_EYE) {
+					return 3;
+				}
+				return 0;
+			}
+
+			int get_plot_count() {
+				return get_center_plot_count() + u_petals;
+			}
+
+			vec2 polar(vec2 point, float scale, float rotate) {
+				point -= 0.5;
+				float r = length(point) * scale;
+				float phi = mod(atan(point.y, point.x) + PI + rotate, _2PI);
+				return vec2(r, phi);
+			}
+
+			float set_range(float x, vec2 old_range, vec2 new_range) {
+				x = (x - old_range.x) / (old_range.y - old_range.x);
+				x = new_range.x + x * (new_range.y - new_range.x);
+				return x;
+			}
+
+			vec3 color(vec2 point) {
+				if(u_color_type == COLOR_CONST) {
+					return vec3(0); //u_color;
+				}
+				if(u_color_type == COLOR_TEXTURE) {
+					return vec3(0); //texture2D(u_texture, vec2(uv.x, 1.0 - uv.y)).xyz;
+				}
+				float phi = point.y;
+				return vec3(
+					0.7 * pow(1.2 + sin(phi + PI / 3.0), 0.25),
+					0.7 * pow(1.2 + sin(phi + 4.0 * PI / 3.0), 0.25),
+					0.9 * pow(1.2 + sin(phi + 2.0 * PI / 3.0), 1.0)
+				);
+			}
+
+			float petal(float x) {
+				if(x > 0.5) {
+					x = 1.0 - x;
+				}
+				float res;
+				vec2 oy = vec2(0.0, 1.0);
+				vec2 y_range = oy;
+				float petal_piece_x = u_petal_piece_x;
+				if(u_animate > 0) {
+					petal_piece_x = 0.25 * (sin(u_time) + 1.0);
+				}
+				if(x < petal_piece_x) {
+					x = set_range(x, vec2(0.0, petal_piece_x), oy);
+					res = pow(x, u_petal_piece_power.x);
+					if(petal_piece_x < 0.25) {
+						y_range.x = 2.0 * (0.25 - petal_piece_x);
+					}
+					y_range.y = u_petal_piece_y.x;
+				}
+				else {
+					x = set_range(x, vec2(petal_piece_x, 1.0), oy);
+					res = 1.0 - pow(1.0 - x, u_petal_piece_power.y);
+					if(u_petal_piece_y.y > u_petal_piece_y.x) {
+						y_range = u_petal_piece_y;
+					}
+					else {
+						res = 1.0 - res;
+						y_range = u_petal_piece_y.yx;
+					}
+				}
+				return set_range(res, oy, y_range);
+			}
+
+			float plot(float phi, int i) {
+				if(u_center_type == CENTER_CIRCLE) {
+					if(i == 0) {
+						return u_center_size;
+					}
+					--i;
+				}
+				else if(u_center_type == CENTER_EYE) {
+					if(i < 3) {
+						phi += u_center_rotate;
+					}
+					if(i == 0) {
+						float inner_shape = u_eye_inner_shape;
+						if(u_animate > 0) {
+							inner_shape = 0.5 + 0.5 * cos(u_time);
+						}
+						return u_center_size * 0.33 * (2.0 - mix(
+							pow(2.0 * abs(cos(phi)), u_eye_inner_power),
+							pow(2.0 * abs(sin(phi)), u_eye_inner_power),
+							inner_shape
+						));
+					}
+					if(i == 1) {
+						float center_size = u_center_size;
+						if(u_animate > 0) {
+							center_size *= 1.0 -	0.05 * sin(u_time);
+						}
+						return center_size;
+					}
+					if(i == 2) {
+						float outer_power = u_eye_outer_power;
+						if(u_animate > 0) {
+							outer_power = 0.225 + 0.075 * cos(u_time);
+						}
+						return u_center_size * 1.66 * (2.0 - mix(
+							pow(2.0 * abs(cos(phi)), outer_power),
+							pow(2.0 * abs(sin(phi)), outer_power),
+							u_eye_outer_shape
+						));
+					}
+					i -= 3;
+				}
+
+				int last_layer = max(1, u_petals - u_petals_per_layer);
+				float size = 1.0;
+				int layer_index;
+				int layer_count;
+
+				if(u_petal_size == PETAL_SIZE_CONTINUOUS) {
+					layer_index = min(i, last_layer);
+					layer_count = last_layer;
+					phi += _2PI * max(0.0, float(i - last_layer)) / float(u_petals_per_layer);
+				}
+				else {
+					layer_index = i / u_petals_per_layer;
+					layer_count = int(ceil(float(u_petals) / float(u_petals_per_layer)));
+					phi += _2PI * float(i - layer_index * u_petals_per_layer) / float(u_petals_per_layer);
+				}
+
+				float layer_size = float(layer_index) / float(layer_count);
+				size *= pow(1.0 + layer_size, 1.5);
+				phi += u_layer_offset * float(layer_index);
+
+				float res = petal(fract(phi / _2PI)) * size;
+				return max(0.0, res);
+			}
+
+			vec2 plots(vec2 point) {
+				int center_plot_count = get_center_plot_count();
+				int plot_count = get_plot_count();
+				int layer_count = u_petals / u_petals_per_layer;
+				float r_prev = -1.0;
+				float r = point.x;
+				float phi = point.y;
+				vec2 res = vec2(0.0, -1.0);
+				for(int i = 0; i < MAX_PLOT_COUNT; ++i) {
+					if(i >= plot_count) {
+						break;
+					}
+					float r_plot = abs(plot(phi, i));
+					if(r_prev > r) {
+						break;
+					}
+					r_prev = r_plot;
+					if(u_petal_size == PETAL_SIZE_LAYERS) {
+						int j = i - center_plot_count;
+						int layer = j / u_petals_per_layer;
+						int part = j - layer * u_petals_per_layer;
+						if(j >= 0 && part < u_petals_per_layer / 2 && layer < layer_count - 1) {
+							float r_last = plot(phi, i + u_petals_per_layer - part - 1);
+							if(r < r_last) {
+								r_prev = -1.0;
+								continue;
+							}
+							/*if(r < r_prev) {
+								 res.x = max(res.x, r_last);
+								 res.y = min(res.y, r_prev);
+								 continue;
+								 }*/
+						}
+					}
+					if(r > r_plot) {
+						res.x = max(res.x, r_plot);
+					}
+					else if(r < r_plot) {
+						if(res.y < 0.0) {
+							res.y = r_plot;
+						}
+						else {
+							res.y = min(res.y, r_plot);
+						}
+					}
+				}
+				return res;
+			}
+
+			float light(float r_plot, float r_point) {
+				float dist = abs(r_point - r_plot);
+				return 1.0 / (u_light_attenuation.x + (u_light_attenuation.y + u_light_attenuation.z * dist) * dist);
+			}
+
+			float alpha(vec2 point) {
+				vec2 plot_points = plots(point);
+				float r = point.x;
+				float r_min = plot_points.x;
+				float r_max = plot_points.y;
+				if(r_min < 1e-3) {
+					return light(r_max, r);
+				}
+				if(r_max < 0.0) {
+					r_max = u_scale / 2.0;
+					float k = r_max < r_min ? 1.0 : (r - r_min) / (r_max - r_min);
+					return mix(light(r_min, r), 0.0, k);
+				}
+				return mix(light(r_min, r), light(r_max, r), (r - r_min) / (r_max - r_min));
+			}
+
+			void main(void) {
+				vec2 point = polar(uv, u_scale, u_rotate);
+				gl_FragColor = vec4(color(point), alpha(point));
+			}
+		</script>
+
+		<script type="text/javascript" src="js/GaPWRM.js"></script>
+		<script type="text/javascript" src="js/yWdOJx.js"></script>
 	</body>
 </html>
